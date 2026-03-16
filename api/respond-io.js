@@ -8,7 +8,7 @@ const SIGNING_KEYS = {
   'conversation.opened': 'uX/7Eb9+INZ8eneL6KUgyvpHaSmCSGEICw8FCUETodA='
 };
 
-const MAILY_URL = 'https://maily-production.up.railway.app/hooks/respond-io';
+const MAILY_URL = 'https://maily-production.up.railway.app/hooks/agent';
 const MAILY_TOKEN = 'O6ZfvymeUGg4PTL7K0wiWeMiHJe6STtxMioWxB5A8ck=';
 
 function verifySignature(payload, signature, eventType) {
@@ -44,8 +44,8 @@ function transformPayload(body) {
     message = `[respond.io] Evento ${eventType} de ${contactName}`;
   }
   
-  // Only send message and name - minimal payload
-  return { message, name: 'respond-io' };
+  // Only send message and from - minimal payload for /hooks/agent
+  return { message, from: 'respond-io' };
 }
 
 export default async function handler(req, res) {
