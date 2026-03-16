@@ -3,7 +3,6 @@
 
 import crypto from 'crypto';
 
-// Signing keys per event type
 const SIGNING_KEYS = {
   'message.received': 'xWcVxZimckKg5m6zvhe3YbRm9ojtKiJ+rXQFkr6vcOA=',
   'conversation.opened': 'uX/7Eb9+INZ8eneL6KUgyvpHaSmCSGEICw8FCUETodA='
@@ -23,7 +22,7 @@ function verifySignature(payload, signature, eventType) {
   return signature === expected;
 }
 
-// Transform respond.io payload to OpenClaw format
+// Transform respond.io payload to simple OpenClaw format
 function transformPayload(body) {
   const eventType = body?.event_type || 'unknown';
   const contact = body?.contact || {};
@@ -31,41 +30,22 @@ function transformPayload(body) {
   const messageObj = body?.message?.message || {};
   
   const contactName = contact.firstName || contact.phone || 'Cliente';
-  const channelSource = channel.source || 'unknown';
+  const channelSource = channel.source || 'desconocido';
   const messageText = messageObj.text || '';
+  const contactPhone = contact.phone || '';
+  
+  let message = '';
   
   if (eventType === 'message.received' && messageText) {
-    return {
-      message: `[respond.io] Mensaje de ${contactName} (${channelSource}): ${messageText}`,
-      name: 'respond-io',
-      metadata: {
-        event_type: eventType,
-        contact_id: contact.id,
-        contact_phone: contact.phone,
-        contact_email: contact.email,
-        channel_source: channelSource,
-        original_message: messageText
-      }
-    };
+    message = `[respond.io] Nuevo mensaje de ${contactName} (${contactPhone}) via ${channelSource}: "${messageText}"`;
   } else if (eventType === 'conversation.opened') {
-    return {
-      message: `[respond.io] Nueva conversación abierta con ${contactName} (${channelSource})`,
-      name: 'respond-io',
-      metadata: {
-        event_type: eventType,
-        contact_id: contact.id,
-        contact_phone: contact.phone,
-        channel_source: channelSource
-      }
-    };
+    message = `[respond.io] Nueva conversación abierta con ${contactName} (${contactPhone}) via ${channelSource}`;
+  } else {
+    message = `[respond.io] Evento ${eventType} de ${contactName}`;
   }
   
-  // Fallback for other events
-  return {
-    message: `[respond.io] Evento: ${eventType} de ${contactName}`,
-    name: 'respond-io',
-    metadata: { event_type: eventType, raw: body }
-  };
+  // Only send message and name - minimal payload
+  return { message, name: 'respond-io' };
 }
 
 export default async function handler(req, res) {
@@ -82,8 +62,10 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: 'Invalid signature' });
     }
 
-    // Transform to OpenClaw format
+    // Transform to simple OpenClaw format
     const transformedPayload = transformPayload(req.body);
+    
+    console.log('Sending to Maily:', JSON.stringify(transformedPayload));
 
     // Forward to Maily
     const response = await fetch(MAILY_URL, {
@@ -97,12 +79,7 @@ export default async function handler(req, res) {
 
     const data = await response.text();
     
-    console.log('respond-io webhook forwarded:', {
-      status: response.status,
-      event: eventType,
-      contact: req.body?.contact?.firstName,
-      transformed: transformedPayload.message?.substring(0, 50)
-    });
+    console.log('Maily response:', { status: response.status, body: data });
 
     res.status(response.status).send(data);
   } catch (error) {
