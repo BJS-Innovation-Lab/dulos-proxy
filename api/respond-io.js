@@ -3,13 +3,21 @@
 
 import crypto from 'crypto';
 
-const SIGNING_KEY = 'xWcVxZimckKg5m6zvhe3YbRm9ojtKiJ+rXQFkr6vcOA=';
+// Signing keys per event type
+const SIGNING_KEYS = {
+  'message.received': 'xWcVxZimckKg5m6zvhe3YbRm9ojtKiJ+rXQFkr6vcOA=',
+  'conversation.opened': 'uX/7Eb9+INZ8eneL6KUgyvpHaSmCSGEICw8FCUETodA='
+};
+
 const MAILY_URL = 'https://maily-production.up.railway.app/hooks/respond-io';
 const MAILY_TOKEN = 'O6ZfvymeUGg4PTL7K0wiWeMiHJe6STtxMioWxB5A8ck=';
 
-function verifySignature(payload, signature) {
-  if (!signature) return false;
-  const hmac = crypto.createHmac('sha256', SIGNING_KEY);
+function verifySignature(payload, signature, eventType) {
+  if (!signature) return true; // Skip if no signature header
+  const key = SIGNING_KEYS[eventType];
+  if (!key) return true; // Skip unknown event types
+  
+  const hmac = crypto.createHmac('sha256', key);
   hmac.update(JSON.stringify(payload));
   const expected = hmac.digest('base64');
   return signature === expected;
@@ -21,10 +29,12 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Verify signature (optional - comment out if respond.io doesn't send it)
+    const eventType = req.body?.event_type;
     const signature = req.headers['x-respond-signature'] || req.headers['x-signature'];
-    if (signature && !verifySignature(req.body, signature)) {
-      console.warn('Invalid signature rejected');
+    
+    // Verify signature if present
+    if (signature && !verifySignature(req.body, signature, eventType)) {
+      console.warn('Invalid signature rejected for:', eventType);
       return res.status(401).json({ error: 'Invalid signature' });
     }
 
@@ -42,7 +52,7 @@ export default async function handler(req, res) {
     
     console.log('respond-io webhook forwarded:', {
       status: response.status,
-      event: req.body?.event_type,
+      event: eventType,
       contact: req.body?.contact?.firstName
     });
 
