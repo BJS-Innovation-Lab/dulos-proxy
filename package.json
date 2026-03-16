@@ -1,0 +1,11 @@
+{
+  "name": "dulos-proxy",
+  "version": "1.0.0",
+  "description": "Webhook proxy for Dulos/Maily - adds auth to public endpoints",
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "keywords": ["webhook", "proxy", "respond-io"],
+  "author": "VULKN",
+  "license": "MIT"
+}
