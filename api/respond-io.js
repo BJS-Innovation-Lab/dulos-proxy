@@ -4,8 +4,8 @@
 import crypto from 'crypto';
 
 const SIGNING_KEYS = {
-  'message.received': 'xWcVxZimckKg5m6zvhe3YbRm9ojtKiJ+rXQFkr6vcOA=',
-  'conversation.opened': 'uX/7Eb9+INZ8eneL6KUgyvpHaSmCSGEICw8FCUETodA='
+  'message.received': 'B3u5qRyRw9FFeWJ65fVAgC7OVWca80Eggt4XIPHbv/Q=',
+  'conversation.opened': 'B3u5qRyRw9FFeWJ65fVAgC7OVWca80Eggt4XIPHbv/Q='
 };
 
 const MAILY_URL = 'https://maily-production.up.railway.app/hooks/agent';
