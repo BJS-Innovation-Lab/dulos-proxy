@@ -1,77 +1,116 @@
-// Proxy for respond.io webhooks -> Maily
-// Transforms payload + forwards with auth
+// Proxy for respond.io webhooks -> OpenClaw
+// Only processes message.received events with persistent sessions
 
 import crypto from 'crypto';
 
-const SIGNING_KEYS = {
-  'message.received': 'B3u5qRyRw9FFeWJ65fVAgC7OVWca80Eggt4XIPHbv/Q=',
-  'conversation.opened': 'B3u5qRyRw9FFeWJ65fVAgC7OVWca80Eggt4XIPHbv/Q='
-};
+const SIGNING_KEY = 'B3u5qRyRw9FFeWJ65fVAgC7OVWca80Eggt4XIPHbv/Q=';
+const OPENCLAW_URL = 'https://maily-production.up.railway.app/hooks/respond-io';
+const OPENCLAW_TOKEN = 'O6ZfvymeUGg4PTL7K0wiWeMiHJe6STtxMioWxB5A8ck=';
 
-const MAILY_URL = 'https://maily-production.up.railway.app/hooks/agent';
-const MAILY_TOKEN = 'O6ZfvymeUGg4PTL7K0wiWeMiHJe6STtxMioWxB5A8ck=';
+// In-memory deduplication cache (60 second window)
+const messageCache = new Map();
+const CACHE_TTL = 60 * 1000; // 60 seconds
 
-function verifySignature(payload, signature, eventType) {
+function cleanCache() {
+  const now = Date.now();
+  for (const [messageId, timestamp] of messageCache.entries()) {
+    if (now - timestamp > CACHE_TTL) {
+      messageCache.delete(messageId);
+    }
+  }
+}
+
+function verifySignature(payload, signature) {
   if (!signature) return true;
-  const key = SIGNING_KEYS[eventType];
-  if (!key) return true;
   
-  const hmac = crypto.createHmac('sha256', key);
+  const hmac = crypto.createHmac('sha256', SIGNING_KEY);
   hmac.update(JSON.stringify(payload));
   const expected = hmac.digest('base64');
   return signature === expected;
 }
 
-// Transform respond.io payload to simple OpenClaw format
+function extractSessionKey(phone) {
+  if (!phone) return null;
+  
+  // Remove + prefix and any non-numeric characters
+  const cleanPhone = phone.replace(/^\+/, '').replace(/\D/g, '');
+  return cleanPhone ? `hook:whatsapp:${cleanPhone}` : null;
+}
+
 function transformPayload(body) {
-  const eventType = body?.event_type || 'unknown';
   const contact = body?.contact || {};
   const channel = body?.channel || {};
   const messageObj = body?.message?.message || {};
   
   const contactName = contact.firstName || contact.phone || 'Cliente';
-  const channelSource = channel.source || 'desconocido';
+  const channelSource = channel.source || 'whatsapp';
   const messageText = messageObj.text || '';
   const contactPhone = contact.phone || '';
   
-  let message = '';
+  const message = `[respond.io] Nuevo mensaje de ${contactName} (${contactPhone}) via ${channelSource}: "${messageText}"`;
+  const sessionKey = extractSessionKey(contactPhone);
   
-  if (eventType === 'message.received' && messageText) {
-    message = `[respond.io] Nuevo mensaje de ${contactName} (${contactPhone}) via ${channelSource}: "${messageText}"`;
-  } else if (eventType === 'conversation.opened') {
-    message = `[respond.io] Nueva conversación abierta con ${contactName} (${contactPhone}) via ${channelSource}`;
-  } else {
-    message = `[respond.io] Evento ${eventType} de ${contactName}`;
-  }
-  
-  // Only send message and from - minimal payload for /hooks/agent
-  return { message, from: 'respond-io' };
+  return { message, sessionKey };
 }
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    return res.status(200).json({ ok: true, message: 'Only POST supported' });
   }
 
   try {
     const eventType = req.body?.event_type;
-    const signature = req.headers['x-respond-signature'] || req.headers['x-signature'];
+    const messageId = req.body?.message?.id;
     
-    if (signature && !verifySignature(req.body, signature, eventType)) {
-      console.warn('Invalid signature rejected for:', eventType);
-      return res.status(401).json({ error: 'Invalid signature' });
+    // Clean old cache entries periodically
+    cleanCache();
+    
+    // Only process message.received events
+    if (eventType !== 'message.received') {
+      console.log(`Ignoring event type: ${eventType}`);
+      return res.status(200).json({ ok: true, message: `Ignored ${eventType}` });
     }
-
-    // Transform to simple OpenClaw format
+    
+    // Verify signature
+    const signature = req.headers['x-respond-signature'] || req.headers['x-signature'];
+    if (signature && !verifySignature(req.body, signature)) {
+      console.warn('Invalid signature rejected for message.received');
+      return res.status(200).json({ ok: true, message: 'Invalid signature' });
+    }
+    
+    // Check for duplicate messageId
+    if (messageId && messageCache.has(messageId)) {
+      console.log(`Duplicate message ignored: ${messageId}`);
+      return res.status(200).json({ ok: true, message: 'Duplicate message' });
+    }
+    
+    // Extract and validate message text
+    const messageText = req.body?.message?.message?.text;
+    if (!messageText || messageText.trim() === '') {
+      console.log('Ignoring message without text');
+      return res.status(200).json({ ok: true, message: 'No text content' });
+    }
+    
+    // Add to dedup cache
+    if (messageId) {
+      messageCache.set(messageId, Date.now());
+    }
+    
+    // Transform payload
     const transformedPayload = transformPayload(req.body);
     
-    console.log('Sending to Maily:', JSON.stringify(transformedPayload));
+    if (!transformedPayload.sessionKey) {
+      console.warn('No valid phone number found, cannot create sessionKey');
+      return res.status(200).json({ ok: true, message: 'No valid phone number' });
+    }
+    
+    console.log('Sending to OpenClaw:', JSON.stringify(transformedPayload));
 
-    // Forward to Maily
-    const response = await fetch(MAILY_URL, {
+    // Forward to OpenClaw
+    const response = await fetch(OPENCLAW_URL, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${MAILY_TOKEN}`,
+        'Authorization': `Bearer ${OPENCLAW_TOKEN}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(transformedPayload)
@@ -79,11 +118,14 @@ export default async function handler(req, res) {
 
     const data = await response.text();
     
-    console.log('Maily response:', { status: response.status, body: data });
+    console.log('OpenClaw response:', { status: response.status, body: data });
 
-    res.status(response.status).send(data);
+    // Always return 200 to prevent retries
+    return res.status(200).json({ ok: true, message: 'Processed successfully' });
+    
   } catch (error) {
     console.error('Proxy error:', error);
-    res.status(500).json({ error: 'Proxy error', message: error.message });
+    // Still return 200 to prevent retries
+    return res.status(200).json({ ok: true, message: 'Error handled', error: error.message });
   }
 }
