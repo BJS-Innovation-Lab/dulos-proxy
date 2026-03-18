@@ -5,11 +5,18 @@ Webhook proxy for services that don't support custom auth headers.
 ## Endpoints
 
 ### POST /api/respond-io
-Forwards webhooks to Maily with Bearer auth.
+Original endpoint — forwards webhooks to Maily with Bearer auth.
 
-**Usage:**
+### POST /api/respond-io-maily
+Forwards webhooks to **Maily** with Bearer auth.
+
+### POST /api/respond-io-maximo
+Forwards webhooks to **Maximo** with Bearer auth.
+
+**Usage in respond.io:**
 ```
-respond.io webhook URL: https://dulos-proxy.vercel.app/api/respond-io
+WhatsApp Número 1 (Maily):  https://dulos-proxy.vercel.app/api/respond-io-maily
+WhatsApp Número 2 (Maximo): https://dulos-proxy.vercel.app/api/respond-io-maximo
 ```
 
 ## Deploy
