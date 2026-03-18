@@ -3,7 +3,7 @@
 
 import crypto from 'crypto';
 
-const SIGNING_KEY = 'B3u5qRyRw9FFeWJ65fVAgC7OVWca80Eggt4XIPHbv/Q=';
+const SIGNING_KEY = 'fVpkPpQk3uXQUvAPhjfBV1bmXdNyRVJwZxRgCAw5zCk=';
 const OPENCLAW_URL = 'https://maily-production.up.railway.app/hooks/agent';
 const OPENCLAW_TOKEN = 'O6ZfvymeUGg4PTL7K0wiWeMiHJe6STtxMioWxB5A8ck=';
 

@@ -3,7 +3,7 @@
 
 import crypto from 'crypto';
 
-const SIGNING_KEY = 'B3u5qRyRw9FFeWJ65fVAgC7OVWca80Eggt4XIPHbv/Q=';
+const SIGNING_KEY = 'eg7nijfJL1XoZUw/vQ+qS90ge+Pk8BZe77ol+INcqLI=';
 const OPENCLAW_URL = 'https://maximo-production-3371.up.railway.app/hooks/agent';
 const OPENCLAW_TOKEN = 'ooEMETzpeUwKy8DFCAg4G2q4QHFJ/jkTHo49sas7GcI=';
 
