@@ -52,6 +52,42 @@ function verifySignature(payload, signature) {
   return signature === hmac.digest('base64');
 }
 
+function extractSessionKey(phone) {
+  if (!phone) return null;
+  const cleanPhone = String(phone).replace(/^\+/, '').replace(/\D/g, '');
+  return cleanPhone ? `hook:whatsapp:${cleanPhone}` : null;
+}
+
+function describeIncomingMessage(body) {
+  const messageObj = body?.message?.message || {};
+  const text = (messageObj?.text || '').trim();
+  if (text) return text;
+
+  const type = body?.message?.type || messageObj?.type || 'unknown';
+  const caption = (messageObj?.caption || '').trim();
+  const url = messageObj?.url || messageObj?.link || null;
+
+  const typeLabel = `[attachment:${type}]`;
+  if (caption && url) return `${typeLabel} ${caption} (${url})`;
+  if (caption) return `${typeLabel} ${caption}`;
+  if (url) return `${typeLabel} ${url}`;
+  return typeLabel;
+}
+
+function buildMessage(body) {
+  const contact = body?.contact || {};
+  const channel = body?.channel || {};
+  const messageText = describeIncomingMessage(body);
+  const contactPhone = contact.phone || '';
+  const contactName = contact.firstName || contact.phone || 'Cliente';
+  const channelSource = channel.source || 'whatsapp';
+
+  return {
+    message: `[respond.io] Nuevo mensaje de ${contactName} (${contactPhone}) via ${channelSource}: "${messageText}"`,
+    sessionKey: extractSessionKey(contactPhone)
+  };
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(200).json({ ok: true, message: 'Only POST supported' });
 
@@ -72,12 +108,18 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, message: 'Duplicate message' });
     }
 
-    const messageText = req.body?.message?.message?.text;
-    if (!messageText || messageText.trim() === '') {
-      return res.status(200).json({ ok: true, message: 'No text content' });
+    const transformed = buildMessage(req.body);
+    if (!transformed?.message || transformed.message.trim() === '') {
+      return res.status(200).json({ ok: true, message: 'No usable content' });
     }
 
     if (messageId) messageCache.set(messageId, Date.now());
+
+    const forwardPayload = {
+      message: transformed.message,
+      sessionKey: transformed.sessionKey,
+      _respondIoRaw: req.body
+    };
 
     const response = await fetch(OPENCLAW_URL, {
       method: 'POST',
@@ -85,7 +127,7 @@ export default async function handler(req, res) {
         Authorization: `Bearer ${OPENCLAW_TOKEN}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(req.body)
+      body: JSON.stringify(forwardPayload)
     });
 
     const data = await response.text();

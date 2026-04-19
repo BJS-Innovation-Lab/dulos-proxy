@@ -59,14 +59,29 @@ async function sendRespondIoText(identifier, text) {
   return { ok: resp.ok, status: resp.status, body };
 }
 
+function describeIncomingMessage(body) {
+  const messageObj = body?.message?.message || {};
+  const text = (messageObj?.text || '').trim();
+  if (text) return text;
+
+  const type = body?.message?.type || messageObj?.type || 'unknown';
+  const caption = (messageObj?.caption || '').trim();
+  const url = messageObj?.url || messageObj?.link || null;
+
+  const typeLabel = `[attachment:${type}]`;
+  if (caption && url) return `${typeLabel} ${caption} (${url})`;
+  if (caption) return `${typeLabel} ${caption}`;
+  if (url) return `${typeLabel} ${url}`;
+  return typeLabel;
+}
+
 function buildMessage(body) {
   const contact = body?.contact || {};
   const channel = body?.channel || {};
-  const messageObj = body?.message?.message || {};
 
   const contactName = contact.firstName || contact.phone || 'Cliente';
   const channelSource = channel.source || 'whatsapp';
-  const messageText = messageObj.text || '';
+  const messageText = describeIncomingMessage(body);
   const contactPhone = contact.phone || '';
 
   return {
@@ -102,15 +117,14 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, message: 'Duplicate message' });
     }
 
-    const messageText = req.body?.message?.message?.text;
-    if (!messageText || messageText.trim() === '') {
-      console.log('Ignoring message without text');
-      return res.status(200).json({ ok: true, message: 'No text content' });
+    const transformed = buildMessage(req.body);
+    if (!transformed?.message || transformed.message.trim() === '') {
+      console.log('Ignoring message without usable content');
+      return res.status(200).json({ ok: true, message: 'No usable content' });
     }
 
     if (messageId) messageCache.set(messageId, Date.now());
 
-    const transformed = buildMessage(req.body);
     const forwardPayload = {
       message: transformed.message,
       sessionKey: transformed.sessionKey,
