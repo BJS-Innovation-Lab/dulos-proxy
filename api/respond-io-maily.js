@@ -18,12 +18,17 @@ const FINAL_TEXT_POLL_MS = Number(process.env.RESPOND_IO_FINAL_TEXT_POLL_MS || 1
 const FINAL_TEXT_POLL_INTERVAL_MS = Number(process.env.RESPOND_IO_FINAL_TEXT_POLL_INTERVAL_MS || 1500);
 
 const messageCache = new Map();
-const CACHE_TTL = Number(process.env.RESPOND_IO_DEDUPE_WINDOW_MS || 30000);
+const outboundCache = new Map();
+const CACHE_TTL = Number(process.env.RESPOND_IO_DEDUPE_WINDOW_MS || 300000);
+const OUTBOUND_DEDUPE_WINDOW_MS = Number(process.env.RESPOND_IO_OUTBOUND_DEDUPE_WINDOW_MS || 300000);
 
 function cleanCache() {
   const now = Date.now();
   for (const [messageId, timestamp] of messageCache.entries()) {
     if (now - timestamp > CACHE_TTL) messageCache.delete(messageId);
+  }
+  for (const [outKey, timestamp] of outboundCache.entries()) {
+    if (now - timestamp > OUTBOUND_DEDUPE_WINDOW_MS) outboundCache.delete(outKey);
   }
 }
 
@@ -49,6 +54,28 @@ async function sendRespondIoText(identifier, text) {
 
   const body = await resp.text();
   return { ok: resp.ok, status: resp.status, body };
+}
+
+function computeOutboundKey(identifier, text) {
+  const normalized = stripReplyTags(String(text || ''))
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+  const digest = crypto.createHash('sha1').update(normalized).digest('hex');
+  return `${identifier}|${digest}`;
+}
+
+async function sendRespondIoTextDedup(identifier, text) {
+  const key = computeOutboundKey(identifier, text);
+  const now = Date.now();
+  const prev = outboundCache.get(key);
+  if (prev && now - prev < OUTBOUND_DEDUPE_WINDOW_MS) {
+    return { ok: true, skipped: true, reason: 'duplicate_outbound_suppressed' };
+  }
+
+  const result = await sendRespondIoText(identifier, text);
+  if (result.ok) outboundCache.set(key, now);
+  return result;
 }
 
 function sleep(ms) {
@@ -324,10 +351,12 @@ export default async function handler(req, res) {
       if (!outboundText) {
         console.log('respond.io outbound skipped: no final text in OpenClaw sync response');
       } else if (contactIdentifier) {
-        const sendResult = await sendRespondIoText(contactIdentifier, outboundText);
+        const sendResult = await sendRespondIoTextDedup(contactIdentifier, outboundText);
         console.log('respond.io outbound result:', {
           identifier: contactIdentifier,
           ok: sendResult.ok,
+          skipped: Boolean(sendResult.skipped),
+          reason: sendResult.reason || null,
           status: sendResult.status,
           body: sendResult.body
         });
@@ -359,13 +388,15 @@ export default async function handler(req, res) {
       if (!textToSend) {
         console.log('respond.io outbound skipped: no text available in hybrid mode');
       } else if (contactIdentifier) {
-        const sendResult = await sendRespondIoText(contactIdentifier, textToSend);
+        const sendResult = await sendRespondIoTextDedup(contactIdentifier, textToSend);
         console.log('respond.io outbound result:', {
           mode: PROXY_OUTBOUND_MODE,
           fallback: usedFallback,
           polled: usedPolledText,
           identifier: contactIdentifier,
           ok: sendResult.ok,
+          skipped: Boolean(sendResult.skipped),
+          reason: sendResult.reason || null,
           status: sendResult.status,
           body: sendResult.body
         });
