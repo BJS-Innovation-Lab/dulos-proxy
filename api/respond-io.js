@@ -12,6 +12,7 @@ const RESPOND_IO_TOKEN = process.env.RESPOND_IO_TOKEN || '8vL2GyZldClqASN6t3ZI3Z
 const DEFAULT_ACK_TEXT = process.env.RESPOND_IO_ACK_TEXT || 'Gracias por escribirnos 🙏 Estamos procesando tu mensaje y te respondemos enseguida.';
 const MAX_INLINE_MEDIA_BYTES = Number(process.env.RESPOND_IO_MAX_INLINE_MEDIA_BYTES || 700000);
 const PROXY_OUTBOUND_MODE = process.env.RESPOND_IO_PROXY_OUTBOUND_MODE || 'hybrid'; // disabled|sync|hybrid
+const ALLOW_ACK_FALLBACK = process.env.RESPOND_IO_ALLOW_ACK_FALLBACK === 'true';
 const OPENCLAW_GATEWAY_BASE = process.env.OPENCLAW_GATEWAY_BASE || OPENCLAW_URL.replace(/\/hooks\/respond-io$/, '');
 const OPENCLAW_GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || '';
 const FINAL_TEXT_POLL_MS = Number(process.env.RESPOND_IO_FINAL_TEXT_POLL_MS || 10000);
@@ -341,9 +342,13 @@ export default async function handler(req, res) {
       }
 
       if (!textToSend && hasRunId) {
-        textToSend = DEFAULT_ACK_TEXT;
-        usedFallback = true;
-        console.log('respond.io outbound fallback: no sync/polled text, sending ack', { hasRunId });
+        if (ALLOW_ACK_FALLBACK) {
+          textToSend = DEFAULT_ACK_TEXT;
+          usedFallback = true;
+          console.log('respond.io outbound fallback: no sync/polled text, sending ack', { hasRunId });
+        } else {
+          console.log('respond.io outbound skipped: no sync/polled text and ack fallback disabled', { hasRunId });
+        }
       }
 
       if (!textToSend) {
