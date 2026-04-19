@@ -20,8 +20,10 @@ const FINAL_TEXT_POLL_INTERVAL_MS = Number(process.env.RESPOND_IO_FINAL_TEXT_POL
 // In-memory deduplication caches
 const messageCache = new Map();
 const outboundCache = new Map();
+const phoneCooldownCache = new Map();
 const CACHE_TTL = Number(process.env.RESPOND_IO_DEDUPE_WINDOW_MS || 300000);
 const OUTBOUND_DEDUPE_WINDOW_MS = Number(process.env.RESPOND_IO_OUTBOUND_DEDUPE_WINDOW_MS || 300000);
+const PHONE_COOLDOWN_MS = Number(process.env.RESPOND_IO_PHONE_COOLDOWN_MS || 120000);
 
 function cleanCache() {
   const now = Date.now();
@@ -31,11 +33,18 @@ function cleanCache() {
   for (const [outKey, timestamp] of outboundCache.entries()) {
     if (now - timestamp > OUTBOUND_DEDUPE_WINDOW_MS) outboundCache.delete(outKey);
   }
+  for (const [phoneKey, timestamp] of phoneCooldownCache.entries()) {
+    if (now - timestamp > PHONE_COOLDOWN_MS) phoneCooldownCache.delete(phoneKey);
+  }
+}
+
+function normalizePhone(phone) {
+  return String(phone || '').replace(/\D/g, '');
 }
 
 function normalizeDedupeSource(body) {
   const messageObj = body?.message?.message || {};
-  const phone = String(body?.contact?.phone || '').replace(/\D/g, '');
+  const phone = normalizePhone(body?.contact?.phone || '');
   const type = String(body?.message?.type || messageObj?.type || '').toLowerCase();
   const text = String(messageObj?.text || '').trim().toLowerCase();
   const caption = String(messageObj?.caption || '').trim().toLowerCase();
@@ -298,6 +307,16 @@ export default async function handler(req, res) {
     if (signature && !verifySignature(req.body, signature)) {
       console.warn('Invalid signature rejected for message.received');
       return res.status(200).json({ ok: true, message: 'Invalid signature' });
+    }
+
+    const phoneKey = normalizePhone(req.body?.contact?.phone || '');
+    if (phoneKey) {
+      const lastPhoneTs = phoneCooldownCache.get(phoneKey);
+      if (lastPhoneTs && Date.now() - lastPhoneTs < PHONE_COOLDOWN_MS) {
+        console.log('Duplicate webhook suppressed by phone cooldown', { phoneKey, messageId });
+        return res.status(200).json({ ok: true, message: 'Phone cooldown suppression' });
+      }
+      phoneCooldownCache.set(phoneKey, Date.now());
     }
 
     if (messageCache.has(dedupeKey)) {
