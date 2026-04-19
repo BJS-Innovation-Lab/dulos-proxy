@@ -10,6 +10,7 @@ const OPENCLAW_TOKEN = 'O6ZfvymeUGg4PTL7K0wiWeMiHJe6STtxMioWxB5A8ck=';
 const RESPOND_IO_API_BASE = process.env.RESPOND_IO_API_BASE || 'https://api.respond.io/v2';
 const RESPOND_IO_TOKEN = process.env.RESPOND_IO_TOKEN || '8vL2GyZldClqASN6t3ZI3Zec8b5pvL1pcBAIluK+X1U=';
 const DEFAULT_ACK_TEXT = process.env.RESPOND_IO_ACK_TEXT || 'Gracias por escribirnos 🙏 Estamos procesando tu mensaje y te respondemos enseguida.';
+const MAX_INLINE_MEDIA_BYTES = Number(process.env.RESPOND_IO_MAX_INLINE_MEDIA_BYTES || 700000);
 
 const messageCache = new Map();
 const CACHE_TTL = 60 * 1000;
@@ -88,6 +89,37 @@ function buildMessage(body) {
   };
 }
 
+async function extractMediaPayload(body) {
+  const messageObj = body?.message?.message || {};
+  const type = body?.message?.type || messageObj?.type || null;
+  if (!type || type === 'text') return null;
+
+  const url = messageObj?.url || messageObj?.link || null;
+  const caption = (messageObj?.caption || '').trim() || null;
+  const mimeType = messageObj?.mimeType || messageObj?.mimetype || null;
+
+  const media = { type, url, caption, mimeType, inlineDataUrl: null };
+  if (!url) return media;
+
+  try {
+    const resp = await fetch(url, {
+      headers: RESPOND_IO_TOKEN ? { Authorization: `Bearer ${RESPOND_IO_TOKEN}` } : undefined
+    });
+    if (!resp.ok) return media;
+
+    const contentType = resp.headers.get('content-type') || mimeType || 'application/octet-stream';
+    const buf = Buffer.from(await resp.arrayBuffer());
+    if (buf.length > 0 && buf.length <= MAX_INLINE_MEDIA_BYTES) {
+      media.inlineDataUrl = `data:${contentType};base64,${buf.toString('base64')}`;
+      media.inlineBytes = buf.length;
+    }
+  } catch (err) {
+    console.log('respond.io media fetch failed:', String(err));
+  }
+
+  return media;
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(200).json({ ok: true, message: 'Only POST supported' });
 
@@ -113,12 +145,15 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, message: 'No usable content' });
     }
 
+    const mediaPayload = await extractMediaPayload(req.body);
+
     if (messageId) messageCache.set(messageId, Date.now());
 
     const forwardPayload = {
       message: transformed.message,
       sessionKey: transformed.sessionKey,
-      _respondIoRaw: req.body
+      _respondIoRaw: req.body,
+      _respondIoMedia: mediaPayload
     };
 
     const response = await fetch(OPENCLAW_URL, {
