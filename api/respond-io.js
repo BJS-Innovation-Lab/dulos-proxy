@@ -4,7 +4,7 @@
 import crypto from 'crypto';
 
 const SIGNING_KEY = 'B3u5qRyRw9FFeWJ65fVAgC7OVWca80Eggt4XIPHbv/Q=';
-const OPENCLAW_URL = 'https://maily-production.up.railway.app/hooks/agent';
+const OPENCLAW_URL = 'https://maily-production.up.railway.app/hooks/agent?channel=last%7Ctelegram';
 const OPENCLAW_TOKEN = 'O6ZfvymeUGg4PTL7K0wiWeMiHJe6STtxMioWxB5A8ck=';
 
 // In-memory deduplication cache (60 second window)
@@ -86,7 +86,6 @@ export default async function handler(req, res) {
     const forwardPayload = {
       message: transformed.message,
       sessionKey: transformed.sessionKey,
-      channel: 'last|telegram',
       _respondIoRaw: req.body
     };
 
