@@ -25,6 +25,28 @@ function verifySignature(payload, signature) {
   return signature === hmac.digest('base64');
 }
 
+function extractSessionKey(phone) {
+  if (!phone) return null;
+  const cleanPhone = String(phone).replace(/^\+/, '').replace(/\D/g, '');
+  return cleanPhone ? `hook:whatsapp:${cleanPhone}` : null;
+}
+
+function buildMessage(body) {
+  const contact = body?.contact || {};
+  const channel = body?.channel || {};
+  const messageObj = body?.message?.message || {};
+
+  const contactName = contact.firstName || contact.phone || 'Cliente';
+  const channelSource = channel.source || 'whatsapp';
+  const messageText = messageObj.text || '';
+  const contactPhone = contact.phone || '';
+
+  return {
+    message: `[respond.io] Nuevo mensaje de ${contactName} (${contactPhone}) via ${channelSource}: "${messageText}"`,
+    sessionKey: extractSessionKey(contactPhone)
+  };
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(200).json({ ok: true, message: 'Only POST supported' });
@@ -60,10 +82,19 @@ export default async function handler(req, res) {
 
     if (messageId) messageCache.set(messageId, Date.now());
 
-    console.log('Forwarding raw webhook to OpenClaw /hooks/respond-io', {
+    const transformed = buildMessage(req.body);
+    const forwardPayload = {
+      ...req.body,
+      message: transformed.message,
+      sessionKey: transformed.sessionKey,
+      _respondIoRaw: req.body
+    };
+
+    console.log('Forwarding hybrid webhook to OpenClaw /hooks/respond-io', {
       messageId,
       eventType,
-      contactPhone: req.body?.contact?.phone || null
+      contactPhone: req.body?.contact?.phone || null,
+      sessionKey: transformed.sessionKey
     });
 
     const response = await fetch(OPENCLAW_URL, {
@@ -72,7 +103,7 @@ export default async function handler(req, res) {
         Authorization: `Bearer ${OPENCLAW_TOKEN}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(req.body)
+      body: JSON.stringify(forwardPayload)
     });
 
     const data = await response.text();
