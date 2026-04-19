@@ -12,6 +12,10 @@ const RESPOND_IO_TOKEN = process.env.RESPOND_IO_TOKEN || '8vL2GyZldClqASN6t3ZI3Z
 const DEFAULT_ACK_TEXT = process.env.RESPOND_IO_ACK_TEXT || 'Gracias por escribirnos 🙏 Estamos procesando tu mensaje y te respondemos enseguida.';
 const MAX_INLINE_MEDIA_BYTES = Number(process.env.RESPOND_IO_MAX_INLINE_MEDIA_BYTES || 700000);
 const PROXY_OUTBOUND_MODE = process.env.RESPOND_IO_PROXY_OUTBOUND_MODE || 'hybrid'; // disabled|sync|hybrid
+const OPENCLAW_GATEWAY_BASE = process.env.OPENCLAW_GATEWAY_BASE || OPENCLAW_URL.replace(/\/hooks\/respond-io$/, '');
+const OPENCLAW_GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || '';
+const FINAL_TEXT_POLL_MS = Number(process.env.RESPOND_IO_FINAL_TEXT_POLL_MS || 10000);
+const FINAL_TEXT_POLL_INTERVAL_MS = Number(process.env.RESPOND_IO_FINAL_TEXT_POLL_INTERVAL_MS || 1500);
 
 // In-memory deduplication cache (60 second window)
 const messageCache = new Map();
@@ -59,6 +63,100 @@ async function sendRespondIoText(identifier, text) {
 
   const body = await resp.text();
   return { ok: resp.ok, status: resp.status, body };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function stripReplyTags(text) {
+  if (!text) return text;
+  return String(text)
+    .replace(/^\s*\[\[\s*reply_to[^\]]*\]\]\s*/i, '')
+    .trim();
+}
+
+function extractAssistantText(historyMessages, minTimestampMs = 0) {
+  if (!Array.isArray(historyMessages)) return null;
+
+  for (let i = historyMessages.length - 1; i >= 0; i--) {
+    const msg = historyMessages[i];
+    if (!msg || msg.role !== 'assistant') continue;
+
+    const ts = Number(msg.timestamp || 0);
+    if (minTimestampMs && ts && ts < minTimestampMs) continue;
+
+    const chunks = Array.isArray(msg.content) ? msg.content : [];
+    const text = chunks
+      .filter((chunk) => chunk?.type === 'text' && typeof chunk.text === 'string')
+      .map((chunk) => chunk.text.trim())
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+
+    const cleaned = stripReplyTags(text);
+    if (cleaned && cleaned !== 'NO_REPLY') return cleaned;
+  }
+
+  return null;
+}
+
+async function invokeGatewayTool(tool, args) {
+  if (!OPENCLAW_GATEWAY_TOKEN) return { ok: false, reason: 'missing_gateway_token' };
+
+  const resp = await fetch(`${OPENCLAW_GATEWAY_BASE}/tools/invoke`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${OPENCLAW_GATEWAY_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ tool, args })
+  });
+
+  const body = await resp.text();
+  let parsed = null;
+  try {
+    parsed = JSON.parse(body || '{}');
+  } catch {
+    parsed = { raw: body };
+  }
+
+  return { ok: resp.ok, status: resp.status, parsed, body };
+}
+
+async function pollFinalAssistantText(sessionKey, minTimestampMs = 0) {
+  if (!sessionKey) return null;
+  if (!OPENCLAW_GATEWAY_TOKEN) return null;
+
+  const candidates = [sessionKey];
+  if (!sessionKey.startsWith('agent:')) candidates.unshift(`agent:main:${sessionKey}`);
+  const uniqueCandidates = [...new Set(candidates.filter(Boolean))];
+
+  const deadline = Date.now() + Math.max(0, FINAL_TEXT_POLL_MS);
+  while (Date.now() < deadline) {
+    for (const candidate of uniqueCandidates) {
+      try {
+        const toolResp = await invokeGatewayTool('sessions_history', {
+          sessionKey: candidate,
+          limit: 8,
+          includeTools: false
+        });
+
+        if (!toolResp.ok) continue;
+
+        const result = toolResp.parsed?.result || toolResp.parsed;
+        const messages = result?.messages || [];
+        const text = extractAssistantText(messages, minTimestampMs);
+        if (text) return { text, sessionKey: candidate };
+      } catch (err) {
+        console.log('respond.io poll error:', String(err));
+      }
+    }
+
+    await sleep(FINAL_TEXT_POLL_INTERVAL_MS);
+  }
+
+  return null;
 }
 
 function describeIncomingMessage(body) {
@@ -174,6 +272,8 @@ export default async function handler(req, res) {
       sessionKey: transformed.sessionKey
     });
 
+    const requestStartMs = Date.now();
+
     const response = await fetch(OPENCLAW_URL, {
       method: 'POST',
       headers: {
@@ -223,11 +323,27 @@ export default async function handler(req, res) {
         console.log('respond.io outbound skipped: missing contact.phone');
       }
     } else {
-      // hybrid mode: prefer sync assistant text; otherwise send non-silent fallback
+      // hybrid mode: prefer sync assistant text; try polling final run output; fallback to ack
       let textToSend = outboundText;
+      let usedFallback = false;
+      let usedPolledText = false;
+
+      if (!textToSend && hasRunId) {
+        const polled = await pollFinalAssistantText(transformed.sessionKey, requestStartMs);
+        if (polled?.text) {
+          textToSend = polled.text;
+          usedPolledText = true;
+          console.log('respond.io outbound poll success:', {
+            sessionKey: polled.sessionKey,
+            textLength: textToSend.length
+          });
+        }
+      }
+
       if (!textToSend && hasRunId) {
         textToSend = DEFAULT_ACK_TEXT;
-        console.log('respond.io outbound fallback: no sync text, sending ack', { hasRunId });
+        usedFallback = true;
+        console.log('respond.io outbound fallback: no sync/polled text, sending ack', { hasRunId });
       }
 
       if (!textToSend) {
@@ -236,7 +352,8 @@ export default async function handler(req, res) {
         const sendResult = await sendRespondIoText(contactIdentifier, textToSend);
         console.log('respond.io outbound result:', {
           mode: PROXY_OUTBOUND_MODE,
-          fallback: textToSend === DEFAULT_ACK_TEXT,
+          fallback: usedFallback,
+          polled: usedPolledText,
           identifier: contactIdentifier,
           ok: sendResult.ok,
           status: sendResult.status,
