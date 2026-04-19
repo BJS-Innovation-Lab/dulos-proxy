@@ -11,6 +11,7 @@ const RESPOND_IO_API_BASE = process.env.RESPOND_IO_API_BASE || 'https://api.resp
 const RESPOND_IO_TOKEN = process.env.RESPOND_IO_TOKEN || '8vL2GyZldClqASN6t3ZI3Zec8b5pvL1pcBAIluK+X1U=';
 const DEFAULT_ACK_TEXT = process.env.RESPOND_IO_ACK_TEXT || 'Gracias por escribirnos 🙏 Estamos procesando tu mensaje y te respondemos enseguida.';
 const MAX_INLINE_MEDIA_BYTES = Number(process.env.RESPOND_IO_MAX_INLINE_MEDIA_BYTES || 700000);
+const PROXY_OUTBOUND_MODE = process.env.RESPOND_IO_PROXY_OUTBOUND_MODE || 'disabled'; // disabled|sync
 
 const messageCache = new Map();
 const CACHE_TTL = 60 * 1000;
@@ -179,8 +180,16 @@ export default async function handler(req, res) {
       outboundText = null;
     }
 
-    if (!outboundText) {
-      console.log('respond.io outbound skipped: no final text in OpenClaw response');
+    if (PROXY_OUTBOUND_MODE !== 'sync') {
+      console.log('respond.io outbound skipped: proxy outbound disabled (agent-run must send via API)', {
+        mode: PROXY_OUTBOUND_MODE,
+        hasRunId: (() => {
+          try { return Boolean(JSON.parse(data || '{}')?.runId); } catch { return false; }
+        })(),
+        hasSyncText: Boolean(outboundText)
+      });
+    } else if (!outboundText) {
+      console.log('respond.io outbound skipped: no final text in OpenClaw sync response');
     } else if (contactIdentifier) {
       const sendResult = await sendRespondIoText(contactIdentifier, outboundText);
       console.log('respond.io outbound result:', {
