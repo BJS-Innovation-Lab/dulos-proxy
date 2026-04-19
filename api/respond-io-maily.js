@@ -11,7 +11,7 @@ const RESPOND_IO_API_BASE = process.env.RESPOND_IO_API_BASE || 'https://api.resp
 const RESPOND_IO_TOKEN = process.env.RESPOND_IO_TOKEN || '8vL2GyZldClqASN6t3ZI3Zec8b5pvL1pcBAIluK+X1U=';
 const DEFAULT_ACK_TEXT = process.env.RESPOND_IO_ACK_TEXT || 'Gracias por escribirnos 🙏 Estamos procesando tu mensaje y te respondemos enseguida.';
 const MAX_INLINE_MEDIA_BYTES = Number(process.env.RESPOND_IO_MAX_INLINE_MEDIA_BYTES || 700000);
-const PROXY_OUTBOUND_MODE = process.env.RESPOND_IO_PROXY_OUTBOUND_MODE || 'disabled'; // disabled|sync
+const PROXY_OUTBOUND_MODE = process.env.RESPOND_IO_PROXY_OUTBOUND_MODE || 'hybrid'; // disabled|sync|hybrid
 
 const messageCache = new Map();
 const CACHE_TTL = 60 * 1000;
@@ -180,26 +180,54 @@ export default async function handler(req, res) {
       outboundText = null;
     }
 
-    if (PROXY_OUTBOUND_MODE !== 'sync') {
+    const parsed = (() => {
+      try { return JSON.parse(data || '{}'); } catch { return {}; }
+    })();
+    const hasRunId = Boolean(parsed?.runId);
+
+    if (PROXY_OUTBOUND_MODE === 'disabled') {
       console.log('respond.io outbound skipped: proxy outbound disabled (agent-run must send via API)', {
         mode: PROXY_OUTBOUND_MODE,
-        hasRunId: (() => {
-          try { return Boolean(JSON.parse(data || '{}')?.runId); } catch { return false; }
-        })(),
+        hasRunId,
         hasSyncText: Boolean(outboundText)
       });
-    } else if (!outboundText) {
-      console.log('respond.io outbound skipped: no final text in OpenClaw sync response');
-    } else if (contactIdentifier) {
-      const sendResult = await sendRespondIoText(contactIdentifier, outboundText);
-      console.log('respond.io outbound result:', {
-        identifier: contactIdentifier,
-        ok: sendResult.ok,
-        status: sendResult.status,
-        body: sendResult.body
-      });
+    } else if (PROXY_OUTBOUND_MODE === 'sync') {
+      if (!outboundText) {
+        console.log('respond.io outbound skipped: no final text in OpenClaw sync response');
+      } else if (contactIdentifier) {
+        const sendResult = await sendRespondIoText(contactIdentifier, outboundText);
+        console.log('respond.io outbound result:', {
+          identifier: contactIdentifier,
+          ok: sendResult.ok,
+          status: sendResult.status,
+          body: sendResult.body
+        });
+      } else {
+        console.log('respond.io outbound skipped: missing contact.phone');
+      }
     } else {
-      console.log('respond.io outbound skipped: missing contact.phone');
+      // hybrid mode: prefer sync assistant text; otherwise send non-silent fallback
+      let textToSend = outboundText;
+      if (!textToSend && hasRunId) {
+        textToSend = DEFAULT_ACK_TEXT;
+        console.log('respond.io outbound fallback: no sync text, sending ack', { hasRunId });
+      }
+
+      if (!textToSend) {
+        console.log('respond.io outbound skipped: no text available in hybrid mode');
+      } else if (contactIdentifier) {
+        const sendResult = await sendRespondIoText(contactIdentifier, textToSend);
+        console.log('respond.io outbound result:', {
+          mode: PROXY_OUTBOUND_MODE,
+          fallback: textToSend === DEFAULT_ACK_TEXT,
+          identifier: contactIdentifier,
+          ok: sendResult.ok,
+          status: sendResult.status,
+          body: sendResult.body
+        });
+      } else {
+        console.log('respond.io outbound skipped: missing contact.phone');
+      }
     }
 
     return res.status(200).json({ ok: true, message: 'Processed successfully' });
