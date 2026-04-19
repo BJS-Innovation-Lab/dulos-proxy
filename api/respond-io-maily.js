@@ -7,6 +7,10 @@ const SIGNING_KEY = 'fVpkPpQk3uXQUvAPhjfBV1bmXdNyRVJwZxRgCAw5zCk=';
 const OPENCLAW_URL = 'https://maily-production.up.railway.app/hooks/respond-io';
 const OPENCLAW_TOKEN = 'O6ZfvymeUGg4PTL7K0wiWeMiHJe6STtxMioWxB5A8ck=';
 
+const RESPOND_IO_API_BASE = process.env.RESPOND_IO_API_BASE || 'https://api.respond.io/v2';
+const RESPOND_IO_TOKEN = process.env.RESPOND_IO_TOKEN || '8vL2GyZldClqASN6t3ZI3Zec8b5pvL1pcBAIluK+X1U=';
+const DEFAULT_ACK_TEXT = process.env.RESPOND_IO_ACK_TEXT || '¡Hola! 👋 Soy Andrea de Dulos. Ya recibimos tu mensaje y te ayudamos enseguida.';
+
 const messageCache = new Map();
 const CACHE_TTL = 60 * 1000;
 
@@ -15,6 +19,30 @@ function cleanCache() {
   for (const [messageId, timestamp] of messageCache.entries()) {
     if (now - timestamp > CACHE_TTL) messageCache.delete(messageId);
   }
+}
+
+async function sendRespondIoText(identifier, text) {
+  if (!identifier || !text) return { ok: false, reason: 'missing_identifier_or_text' };
+  if (!RESPOND_IO_TOKEN) return { ok: false, reason: 'missing_respond_io_token' };
+
+  const url = `${RESPOND_IO_API_BASE}/contact/${encodeURIComponent(identifier)}/message`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${RESPOND_IO_TOKEN}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    body: JSON.stringify({
+      message: {
+        type: 'text',
+        text
+      }
+    })
+  });
+
+  const body = await resp.text();
+  return { ok: resp.ok, status: resp.status, body };
 }
 
 function verifySignature(payload, signature) {
@@ -62,6 +90,19 @@ export default async function handler(req, res) {
 
     const data = await response.text();
     console.log('OpenClaw response:', { status: response.status, body: data });
+
+    const contactIdentifier = req.body?.contact?.phone || null;
+    if (contactIdentifier) {
+      const sendResult = await sendRespondIoText(contactIdentifier, DEFAULT_ACK_TEXT);
+      console.log('respond.io outbound result:', {
+        identifier: contactIdentifier,
+        ok: sendResult.ok,
+        status: sendResult.status,
+        body: sendResult.body
+      });
+    } else {
+      console.log('respond.io outbound skipped: missing contact.phone');
+    }
 
     return res.status(200).json({ ok: true, message: 'Processed successfully' });
   } catch (error) {
