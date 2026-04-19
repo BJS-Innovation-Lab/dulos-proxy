@@ -102,9 +102,9 @@ export default async function handler(req, res) {
       outboundText = null;
     }
 
-    if (!outboundText) outboundText = DEFAULT_ACK_TEXT;
-
-    if (contactIdentifier) {
+    if (!outboundText) {
+      console.log('respond.io outbound skipped: no final text in OpenClaw response');
+    } else if (contactIdentifier) {
       const sendResult = await sendRespondIoText(contactIdentifier, outboundText);
       console.log('respond.io outbound result:', {
         identifier: contactIdentifier,
