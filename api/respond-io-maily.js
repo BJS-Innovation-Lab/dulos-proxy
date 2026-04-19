@@ -16,6 +16,8 @@ const OPENCLAW_GATEWAY_BASE = process.env.OPENCLAW_GATEWAY_BASE || OPENCLAW_URL.
 const OPENCLAW_GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || '';
 const FINAL_TEXT_POLL_MS = Number(process.env.RESPOND_IO_FINAL_TEXT_POLL_MS || 10000);
 const FINAL_TEXT_POLL_INTERVAL_MS = Number(process.env.RESPOND_IO_FINAL_TEXT_POLL_INTERVAL_MS || 1500);
+const CONTEXT_MESSAGES = Number(process.env.RESPOND_IO_CONTEXT_MESSAGES || 12);
+const CONTEXT_MAX_CHARS = Number(process.env.RESPOND_IO_CONTEXT_MAX_CHARS || 1800);
 
 const messageCache = new Map();
 const outboundCache = new Map();
@@ -114,6 +116,67 @@ function extractAssistantText(historyMessages, minTimestampMs = 0) {
   return null;
 }
 
+function extractMessageText(msg) {
+  const chunks = Array.isArray(msg?.content) ? msg.content : [];
+  const text = chunks
+    .filter((chunk) => chunk?.type === 'text' && typeof chunk.text === 'string')
+    .map((chunk) => chunk.text.trim())
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+  const cleaned = stripReplyTags(text);
+  return cleaned === 'NO_REPLY' ? '' : cleaned;
+}
+
+function buildRecentContextText(messages) {
+  if (!Array.isArray(messages)) return null;
+
+  const lines = [];
+  for (const msg of messages) {
+    if (!msg || (msg.role !== 'user' && msg.role !== 'assistant')) continue;
+    const text = extractMessageText(msg);
+    if (!text) continue;
+    const label = msg.role === 'user' ? 'Cliente' : 'Andrea';
+    lines.push(`${label}: ${text.replace(/\s+/g, ' ').trim()}`);
+  }
+
+  if (!lines.length) return null;
+
+  const joined = lines.join('\n');
+  return joined.length > CONTEXT_MAX_CHARS ? joined.slice(-CONTEXT_MAX_CHARS) : joined;
+}
+
+async function fetchRecentSessionContext(sessionKey) {
+  if (!sessionKey || !OPENCLAW_GATEWAY_TOKEN || CONTEXT_MESSAGES <= 0) return null;
+
+  const candidates = [sessionKey];
+  if (!sessionKey.startsWith('agent:')) candidates.unshift(`agent:main:${sessionKey}`);
+  const uniqueCandidates = [...new Set(candidates.filter(Boolean))];
+
+  for (const candidate of uniqueCandidates) {
+    try {
+      const toolResp = await invokeGatewayTool('sessions_history', {
+        sessionKey: candidate,
+        limit: Math.max(4, CONTEXT_MESSAGES),
+        includeTools: false
+      });
+
+      if (!toolResp.ok) continue;
+
+      const result = toolResp.parsed?.result || toolResp.parsed;
+      const messages = result?.messages || [];
+      const contextText = buildRecentContextText(messages);
+      if (contextText) {
+        return { sessionKey: candidate, contextText };
+      }
+    } catch (err) {
+      console.log('respond.io context fetch error:', String(err));
+    }
+  }
+
+  return null;
+}
+
 async function invokeGatewayTool(tool, args) {
   if (!OPENCLAW_GATEWAY_TOKEN) return { ok: false, reason: 'missing_gateway_token' };
 
@@ -173,7 +236,17 @@ async function pollFinalAssistantText(sessionKey, minTimestampMs = 0) {
 }
 
 function normalizePhone(phone) {
-  return String(phone || '').replace(/\D/g, '');
+  let digits = String(phone || '').replace(/\D/g, '');
+  if (!digits) return '';
+
+  // Mexico canonicalization to avoid session splits (+52/52/local 10-digit/mobile 521)
+  if (digits.length === 13 && digits.startsWith('521')) {
+    digits = `52${digits.slice(3)}`;
+  } else if (digits.length === 10) {
+    digits = `52${digits}`;
+  }
+
+  return digits;
 }
 
 function normalizeDedupeSource(body) {
@@ -208,8 +281,7 @@ function verifySignature(payload, signature) {
 }
 
 function extractSessionKey(phone) {
-  if (!phone) return null;
-  const cleanPhone = String(phone).replace(/^\+/, '').replace(/\D/g, '');
+  const cleanPhone = normalizePhone(phone);
   return cleanPhone ? `hook:whatsapp:${cleanPhone}` : null;
 }
 
@@ -306,15 +378,22 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, message: 'No usable content' });
     }
 
+    const recentContext = await fetchRecentSessionContext(transformed.sessionKey);
+    const contextBlock = recentContext?.contextText
+      ? `\n\n[respond.io recent thread context]\n${recentContext.contextText}`
+      : '';
+    const enrichedMessage = `${transformed.message}${contextBlock}`;
+
     const mediaPayload = await extractMediaPayload(req.body);
 
     messageCache.set(dedupeKey, Date.now());
 
     const forwardPayload = {
-      message: transformed.message,
+      message: enrichedMessage,
       sessionKey: transformed.sessionKey,
       _respondIoRaw: req.body,
-      _respondIoMedia: mediaPayload
+      _respondIoMedia: mediaPayload,
+      _respondIoRecentContext: recentContext || null
     };
 
     const requestStartMs = Date.now();
