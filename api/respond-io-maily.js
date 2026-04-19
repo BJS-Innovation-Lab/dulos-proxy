@@ -18,7 +18,7 @@ const FINAL_TEXT_POLL_MS = Number(process.env.RESPOND_IO_FINAL_TEXT_POLL_MS || 1
 const FINAL_TEXT_POLL_INTERVAL_MS = Number(process.env.RESPOND_IO_FINAL_TEXT_POLL_INTERVAL_MS || 1500);
 
 const messageCache = new Map();
-const CACHE_TTL = 60 * 1000;
+const CACHE_TTL = Number(process.env.RESPOND_IO_DEDUPE_WINDOW_MS || 30000);
 
 function cleanCache() {
   const now = Date.now();
@@ -145,6 +145,30 @@ async function pollFinalAssistantText(sessionKey, minTimestampMs = 0) {
   return null;
 }
 
+function normalizeDedupeSource(body) {
+  const messageObj = body?.message?.message || {};
+  const phone = String(body?.contact?.phone || '').replace(/\D/g, '');
+  const type = String(body?.message?.type || messageObj?.type || '').toLowerCase();
+  const text = String(messageObj?.text || '').trim().toLowerCase();
+  const caption = String(messageObj?.caption || '').trim().toLowerCase();
+  const url = String(messageObj?.url || messageObj?.link || '').trim().toLowerCase();
+  return `${phone}|${type}|${text}|${caption}|${url}`;
+}
+
+function computeDedupeKey(body) {
+  const messageId = body?.message?.id;
+  if (messageId) return `id:${messageId}`;
+  const src = normalizeDedupeSource(body);
+  return `fp:${crypto.createHash('sha1').update(src).digest('hex')}`;
+}
+
+function isLikelyOutboundEcho(body) {
+  const direction = String(body?.message?.direction || body?.message?.message?.direction || '').toLowerCase();
+  const fromType = String(body?.message?.fromType || body?.message?.from?.type || '').toLowerCase();
+  const fromMe = body?.message?.message?.fromMe === true;
+  return direction === 'outbound' || fromType === 'agent' || fromType === 'business' || fromMe;
+}
+
 function verifySignature(payload, signature) {
   if (!signature) return true;
   const hmac = crypto.createHmac('sha256', SIGNING_KEY);
@@ -225,17 +249,22 @@ export default async function handler(req, res) {
   try {
     const eventType = req.body?.event_type;
     const messageId = req.body?.message?.id;
+    const dedupeKey = computeDedupeKey(req.body);
 
     cleanCache();
 
     if (eventType !== 'message.received') return res.status(200).json({ ok: true, message: `Ignored ${eventType}` });
+
+    if (isLikelyOutboundEcho(req.body)) {
+      return res.status(200).json({ ok: true, message: 'Ignored outbound echo' });
+    }
 
     const signature = req.headers['x-respond-signature'] || req.headers['x-signature'];
     if (signature && !verifySignature(req.body, signature)) {
       return res.status(200).json({ ok: true, message: 'Invalid signature' });
     }
 
-    if (messageId && messageCache.has(messageId)) {
+    if (messageCache.has(dedupeKey)) {
       return res.status(200).json({ ok: true, message: 'Duplicate message' });
     }
 
@@ -246,7 +275,7 @@ export default async function handler(req, res) {
 
     const mediaPayload = await extractMediaPayload(req.body);
 
-    if (messageId) messageCache.set(messageId, Date.now());
+    messageCache.set(dedupeKey, Date.now());
 
     const forwardPayload = {
       message: transformed.message,
