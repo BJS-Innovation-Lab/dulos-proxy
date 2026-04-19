@@ -137,7 +137,8 @@ export default async function handler(req, res) {
     console.log('OpenClaw response:', { status: response.status, body: data });
 
     // Temporary outbound bridge: send confirmation back via respond.io so WhatsApp receives a reply.
-    const contactIdentifier = req.body?.contact?.phone || null;
+    const contactPhone = req.body?.contact?.phone || null;
+    const contactIdentifier = contactPhone ? `phone:${contactPhone}` : null;
     if (contactIdentifier) {
       const sendResult = await sendRespondIoText(contactIdentifier, DEFAULT_ACK_TEXT);
       console.log('respond.io outbound result:', {
