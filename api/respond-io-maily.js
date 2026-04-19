@@ -4,7 +4,7 @@
 import crypto from 'crypto';
 
 const SIGNING_KEY = 'fVpkPpQk3uXQUvAPhjfBV1bmXdNyRVJwZxRgCAw5zCk=';
-const OPENCLAW_URL = 'https://maily-production.up.railway.app/hooks/respond-io';
+const OPENCLAW_URL = 'https://maily-production.up.railway.app/hooks/agent';
 const OPENCLAW_TOKEN = 'O6ZfvymeUGg4PTL7K0wiWeMiHJe6STtxMioWxB5A8ck=';
 
 const messageCache = new Map();
