@@ -171,12 +171,19 @@ export default async function handler(req, res) {
     const contactPhone = req.body?.contact?.phone || null;
     const contactIdentifier = contactPhone ? `phone:${contactPhone}` : null;
 
+    const incomingText = (req.body?.message?.message?.text || '').trim();
+
     let outboundText = null;
     try {
       const parsed = JSON.parse(data || '{}');
       outboundText = parsed?.summary || parsed?.reply || parsed?.text || null;
     } catch {
       outboundText = null;
+    }
+
+    if (!outboundText && incomingText) {
+      outboundText = DEFAULT_ACK_TEXT;
+      console.log('respond.io outbound fallback enabled: no final text from OpenClaw');
     }
 
     if (!outboundText) {
