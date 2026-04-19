@@ -84,9 +84,9 @@ export default async function handler(req, res) {
 
     const transformed = buildMessage(req.body);
     const forwardPayload = {
-      ...req.body,
       message: transformed.message,
       sessionKey: transformed.sessionKey,
+      channel: 'last|telegram',
       _respondIoRaw: req.body
     };
 
