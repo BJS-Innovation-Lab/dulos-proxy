@@ -91,20 +91,7 @@ export default async function handler(req, res) {
     const data = await response.text();
     console.log('OpenClaw response:', { status: response.status, body: data });
 
-    const contactPhone = req.body?.contact?.phone || null;
-    const contactIdentifier = contactPhone ? `phone:${contactPhone}` : null;
-    if (contactIdentifier) {
-      const sendResult = await sendRespondIoText(contactIdentifier, DEFAULT_ACK_TEXT);
-      console.log('respond.io outbound result:', {
-        identifier: contactIdentifier,
-        ok: sendResult.ok,
-        status: sendResult.status,
-        body: sendResult.body
-      });
-    } else {
-      console.log('respond.io outbound skipped: missing contact.phone');
-    }
-
+    // Outbound reply is handled by OpenClaw hook flow; proxy only forwards inbound webhook.
     return res.status(200).json({ ok: true, message: 'Processed successfully' });
   } catch (error) {
     console.error('Proxy error:', error);
