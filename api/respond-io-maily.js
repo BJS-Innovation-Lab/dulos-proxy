@@ -9,7 +9,7 @@ const OPENCLAW_TOKEN = 'O6ZfvymeUGg4PTL7K0wiWeMiHJe6STtxMioWxB5A8ck=';
 
 const RESPOND_IO_API_BASE = process.env.RESPOND_IO_API_BASE || 'https://api.respond.io/v2';
 const RESPOND_IO_TOKEN = process.env.RESPOND_IO_TOKEN || '8vL2GyZldClqASN6t3ZI3Zec8b5pvL1pcBAIluK+X1U=';
-const DEFAULT_ACK_TEXT = process.env.RESPOND_IO_ACK_TEXT || '¡Hola! 👋 Soy Andrea de Dulos. Ya recibimos tu mensaje y te ayudamos enseguida.';
+const DEFAULT_ACK_TEXT = process.env.RESPOND_IO_ACK_TEXT || 'Gracias por escribirnos 🙏 Estamos procesando tu mensaje y te respondemos enseguida.';
 
 const messageCache = new Map();
 const CACHE_TTL = 60 * 1000;
@@ -91,7 +91,31 @@ export default async function handler(req, res) {
     const data = await response.text();
     console.log('OpenClaw response:', { status: response.status, body: data });
 
-    // Outbound reply is handled by OpenClaw hook flow; proxy only forwards inbound webhook.
+    const contactPhone = req.body?.contact?.phone || null;
+    const contactIdentifier = contactPhone ? `phone:${contactPhone}` : null;
+
+    let outboundText = null;
+    try {
+      const parsed = JSON.parse(data || '{}');
+      outboundText = parsed?.summary || parsed?.reply || parsed?.text || null;
+    } catch {
+      outboundText = null;
+    }
+
+    if (!outboundText) outboundText = DEFAULT_ACK_TEXT;
+
+    if (contactIdentifier) {
+      const sendResult = await sendRespondIoText(contactIdentifier, outboundText);
+      console.log('respond.io outbound result:', {
+        identifier: contactIdentifier,
+        ok: sendResult.ok,
+        status: sendResult.status,
+        body: sendResult.body
+      });
+    } else {
+      console.log('respond.io outbound skipped: missing contact.phone');
+    }
+
     return res.status(200).json({ ok: true, message: 'Processed successfully' });
   } catch (error) {
     console.error('Proxy error:', error);
