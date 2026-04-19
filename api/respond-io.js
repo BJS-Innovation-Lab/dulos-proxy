@@ -20,10 +20,8 @@ const FINAL_TEXT_POLL_INTERVAL_MS = Number(process.env.RESPOND_IO_FINAL_TEXT_POL
 // In-memory deduplication caches
 const messageCache = new Map();
 const outboundCache = new Map();
-const phoneCooldownCache = new Map();
 const CACHE_TTL = Number(process.env.RESPOND_IO_DEDUPE_WINDOW_MS || 300000);
 const OUTBOUND_DEDUPE_WINDOW_MS = Number(process.env.RESPOND_IO_OUTBOUND_DEDUPE_WINDOW_MS || 300000);
-const PHONE_COOLDOWN_MS = Number(process.env.RESPOND_IO_PHONE_COOLDOWN_MS || 120000);
 
 function cleanCache() {
   const now = Date.now();
@@ -32,9 +30,6 @@ function cleanCache() {
   }
   for (const [outKey, timestamp] of outboundCache.entries()) {
     if (now - timestamp > OUTBOUND_DEDUPE_WINDOW_MS) outboundCache.delete(outKey);
-  }
-  for (const [phoneKey, timestamp] of phoneCooldownCache.entries()) {
-    if (now - timestamp > PHONE_COOLDOWN_MS) phoneCooldownCache.delete(phoneKey);
   }
 }
 
@@ -309,15 +304,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, message: 'Invalid signature' });
     }
 
-    const phoneKey = normalizePhone(req.body?.contact?.phone || '');
-    if (phoneKey) {
-      const lastPhoneTs = phoneCooldownCache.get(phoneKey);
-      if (lastPhoneTs && Date.now() - lastPhoneTs < PHONE_COOLDOWN_MS) {
-        console.log('Duplicate webhook suppressed by phone cooldown', { phoneKey, messageId });
-        return res.status(200).json({ ok: true, message: 'Phone cooldown suppression' });
-      }
-      phoneCooldownCache.set(phoneKey, Date.now());
-    }
+    // phone-level cooldown removed: it suppressed legitimate follow-up customer messages
 
     if (messageCache.has(dedupeKey)) {
       console.log('Duplicate webhook ignored', { messageId, dedupeKey });
