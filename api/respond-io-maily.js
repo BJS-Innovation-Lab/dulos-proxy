@@ -19,6 +19,11 @@ const FINAL_TEXT_POLL_INTERVAL_MS = Number(process.env.RESPOND_IO_FINAL_TEXT_POL
 const CONTEXT_MESSAGES = Number(process.env.RESPOND_IO_CONTEXT_MESSAGES || 60);
 const CONTEXT_MAX_CHARS = Number(process.env.RESPOND_IO_CONTEXT_MAX_CHARS || 8000);
 
+// Controlled MCP rollout flags (Phase 0/1 scaffolding)
+const RESPONDIO_MCP_MODE = String(process.env.RESPONDIO_MCP_MODE || 'off').toLowerCase(); // off|shadow|canary|primary
+const RESPONDIO_MCP_CANARY_PERCENT = Math.max(0, Math.min(100, Number(process.env.RESPONDIO_MCP_CANARY_PERCENT || 10)));
+const RESPONDIO_MCP_FAILOVER = String(process.env.RESPONDIO_MCP_FAILOVER || 'legacy').toLowerCase(); // legacy|none
+
 const messageCache = new Map();
 const outboundCache = new Map();
 const CACHE_TTL = Number(process.env.RESPOND_IO_DEDUPE_WINDOW_MS || 300000);
@@ -32,6 +37,37 @@ function cleanCache() {
   for (const [outKey, timestamp] of outboundCache.entries()) {
     if (now - timestamp > OUTBOUND_DEDUPE_WINDOW_MS) outboundCache.delete(outKey);
   }
+}
+
+function stableHash(input) {
+  return crypto.createHash('sha1').update(String(input || '')).digest('hex');
+}
+
+function inMcpCanaryCohort(identifier) {
+  if (!identifier) return false;
+  const h = stableHash(identifier);
+  const bucket = parseInt(h.slice(0, 8), 16) % 100;
+  return bucket < RESPONDIO_MCP_CANARY_PERCENT;
+}
+
+function computeRolloutMeta(contact = {}) {
+  const phone = normalizePhone(contact?.phone || '');
+  const contactId = String(contact?.id || '').trim();
+  const identity = contactId || phone || 'unknown';
+  const canary = inMcpCanaryCohort(identity);
+
+  let activePath = 'legacy';
+  if (RESPONDIO_MCP_MODE === 'shadow') activePath = 'legacy_shadow_mcp';
+  else if (RESPONDIO_MCP_MODE === 'canary') activePath = canary ? 'mcp_canary' : 'legacy';
+  else if (RESPONDIO_MCP_MODE === 'primary') activePath = 'mcp_primary';
+
+  return {
+    mode: RESPONDIO_MCP_MODE,
+    canaryPercent: RESPONDIO_MCP_CANARY_PERCENT,
+    canary,
+    activePath,
+    failover: RESPONDIO_MCP_FAILOVER
+  };
 }
 
 async function sendRespondIoText(identifier, text) {
@@ -332,7 +368,8 @@ function buildMessage(body) {
   return {
     message: `[respond.io] Nuevo mensaje de ${contactName} (${contactPhone}) via ${channelSource}: "${messageText}"`,
     sessionKey: extractSessionKey(contactPhone),
-    sessionAliases: extractSessionAliases(contact)
+    sessionAliases: extractSessionAliases(contact),
+    rollout: computeRolloutMeta(contact)
   };
 }
 
@@ -414,8 +451,15 @@ export default async function handler(req, res) {
       sessionKey: transformed.sessionKey,
       _respondIoRaw: req.body,
       _respondIoMedia: mediaPayload,
-      _respondIoRecentContext: recentContext || null
+      _respondIoRecentContext: recentContext || null,
+      _rollout: transformed.rollout || null
     };
+
+    console.log('respond.io rollout meta', {
+      messageId,
+      sessionKey: transformed.sessionKey,
+      rollout: transformed.rollout || null
+    });
 
     const requestStartMs = Date.now();
 
