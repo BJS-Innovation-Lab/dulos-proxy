@@ -197,6 +197,25 @@ function buildRecentContextText(messages) {
   return joined.length > CONTEXT_MAX_CHARS ? joined.slice(-CONTEXT_MAX_CHARS) : joined;
 }
 
+function getLastAssistantMessage(messages) {
+  if (!Array.isArray(messages)) return null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg || msg.role !== 'assistant') continue;
+    const text = extractMessageText(msg);
+    if (text) return text;
+  }
+  return null;
+}
+
+function isShortLikelyContinuation(incomingText) {
+  const t = String(incomingText || '').trim().toLowerCase();
+  if (!t) return false;
+  if (t.length <= 40) return true;
+  if (/^(ok|va|sale|si|sí|yes|no|gracias|thanks|por favor|dale|listo|perfecto)\b/.test(t)) return true;
+  return false;
+}
+
 async function fetchRecentSessionContext(sessionKey) {
   if (!sessionKey || !OPENCLAW_GATEWAY_TOKEN || CONTEXT_MESSAGES <= 0) return null;
 
@@ -217,8 +236,10 @@ async function fetchRecentSessionContext(sessionKey) {
       const result = toolResp.parsed?.result || toolResp.parsed;
       const messages = result?.messages || [];
       const contextText = buildRecentContextText(messages);
+      const lastAssistantText = getLastAssistantMessage(messages);
+      const pendingQuestion = Boolean(lastAssistantText && lastAssistantText.includes('?'));
       if (contextText) {
-        return { sessionKey: candidate, contextText };
+        return { sessionKey: candidate, contextText, pendingQuestion, lastAssistantText };
       }
     } catch (err) {
       console.log('respond.io context fetch error:', String(err));
@@ -390,10 +411,14 @@ export default async function handler(req, res) {
     }
 
     const recentContext = await fetchRecentSessionContext(transformed.sessionKey);
+    const incomingText = describeIncomingMessage(req.body);
+    const continuationHint = (recentContext?.pendingQuestion && isShortLikelyContinuation(incomingText))
+      ? `\n\n[respond.io continuity hint]\nEl último mensaje de Andrea cerró con pregunta pendiente. Interpreta este mensaje corto como respuesta de seguimiento (NO reiniciar saludo ni mandar plantilla genérica de cartelera). Última pregunta: "${(recentContext.lastAssistantText || '').replace(/\s+/g, ' ').trim()}"`
+      : '';
     const contextBlock = recentContext?.contextText
       ? `\n\n[respond.io recent thread context]\n${recentContext.contextText}`
       : '';
-    const enrichedMessage = `${transformed.message}${contextBlock}`;
+    const enrichedMessage = `${transformed.message}${contextBlock}${continuationHint}`;
 
     const mediaPayload = await extractMediaPayload(req.body);
 
