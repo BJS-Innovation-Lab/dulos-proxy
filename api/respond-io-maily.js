@@ -16,8 +16,8 @@ const OPENCLAW_GATEWAY_BASE = process.env.OPENCLAW_GATEWAY_BASE || OPENCLAW_URL.
 const OPENCLAW_GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || '';
 const FINAL_TEXT_POLL_MS = Number(process.env.RESPOND_IO_FINAL_TEXT_POLL_MS || 10000);
 const FINAL_TEXT_POLL_INTERVAL_MS = Number(process.env.RESPOND_IO_FINAL_TEXT_POLL_INTERVAL_MS || 1500);
-const CONTEXT_MESSAGES = Number(process.env.RESPOND_IO_CONTEXT_MESSAGES || 12);
-const CONTEXT_MAX_CHARS = Number(process.env.RESPOND_IO_CONTEXT_MAX_CHARS || 1800);
+const CONTEXT_MESSAGES = Number(process.env.RESPOND_IO_CONTEXT_MESSAGES || 60);
+const CONTEXT_MAX_CHARS = Number(process.env.RESPOND_IO_CONTEXT_MAX_CHARS || 8000);
 
 const messageCache = new Map();
 const outboundCache = new Map();
@@ -146,11 +146,15 @@ function buildRecentContextText(messages) {
   return joined.length > CONTEXT_MAX_CHARS ? joined.slice(-CONTEXT_MAX_CHARS) : joined;
 }
 
-async function fetchRecentSessionContext(sessionKey) {
-  if (!sessionKey || !OPENCLAW_GATEWAY_TOKEN || CONTEXT_MESSAGES <= 0) return null;
+async function fetchRecentSessionContext(sessionKey, aliasKeys = []) {
+  if ((!sessionKey && !aliasKeys?.length) || !OPENCLAW_GATEWAY_TOKEN || CONTEXT_MESSAGES <= 0) return null;
 
-  const candidates = [sessionKey];
-  if (!sessionKey.startsWith('agent:')) candidates.unshift(`agent:main:${sessionKey}`);
+  const baseKeys = [sessionKey, ...(Array.isArray(aliasKeys) ? aliasKeys : [])].filter(Boolean);
+  const candidates = [];
+  for (const k of baseKeys) {
+    candidates.push(k);
+    if (!k.startsWith('agent:')) candidates.push(`agent:main:${k}`);
+  }
   const uniqueCandidates = [...new Set(candidates.filter(Boolean))];
 
   for (const candidate of uniqueCandidates) {
@@ -285,6 +289,22 @@ function extractSessionKey(phone) {
   return cleanPhone ? `hook:whatsapp:${cleanPhone}` : null;
 }
 
+function extractSessionAliases(contact = {}) {
+  const aliases = [];
+  const phoneRaw = String(contact?.phone || '');
+  const digitsRaw = phoneRaw.replace(/\D/g, '');
+  const phoneCanonical = normalizePhone(phoneRaw);
+  const contactId = String(contact?.id || '').trim();
+
+  if (phoneCanonical) aliases.push(`hook:whatsapp:${phoneCanonical}`);
+  if (digitsRaw && digitsRaw !== phoneCanonical) aliases.push(`hook:whatsapp:${digitsRaw}`);
+  if (digitsRaw.startsWith('52') && digitsRaw.length > 12) aliases.push(`hook:whatsapp:${digitsRaw.slice(0, 12)}`);
+  if (digitsRaw.length === 10) aliases.push(`hook:whatsapp:52${digitsRaw}`);
+  if (contactId) aliases.push(`hook:whatsapp:contact:${contactId}`);
+
+  return [...new Set(aliases.filter(Boolean))];
+}
+
 function describeIncomingMessage(body) {
   const messageObj = body?.message?.message || {};
   const text = (messageObj?.text || '').trim();
@@ -311,7 +331,8 @@ function buildMessage(body) {
 
   return {
     message: `[respond.io] Nuevo mensaje de ${contactName} (${contactPhone}) via ${channelSource}: "${messageText}"`,
-    sessionKey: extractSessionKey(contactPhone)
+    sessionKey: extractSessionKey(contactPhone),
+    sessionAliases: extractSessionAliases(contact)
   };
 }
 
@@ -378,7 +399,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, message: 'No usable content' });
     }
 
-    const recentContext = await fetchRecentSessionContext(transformed.sessionKey);
+    const recentContext = await fetchRecentSessionContext(transformed.sessionKey, transformed.sessionAliases);
     const contextBlock = recentContext?.contextText
       ? `\n\n[respond.io recent thread context]\n${recentContext.contextText}`
       : '';
