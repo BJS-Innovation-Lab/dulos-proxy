@@ -399,14 +399,45 @@ function buildMessage(body) {
   };
 }
 
+async function fetchRespondIoMessageDetail(body) {
+  try {
+    if (!RESPOND_IO_TOKEN) return null;
+    const contactId = body?.contact?.id;
+    const messageId = body?.message?.id;
+    if (!contactId || !messageId) return null;
+
+    const url = `${RESPOND_IO_API_BASE}/contact/id:${encodeURIComponent(String(contactId))}/message/id:${encodeURIComponent(String(messageId))}`;
+    const resp = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${RESPOND_IO_TOKEN}`,
+        Accept: 'application/json'
+      }
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (err) {
+    console.log('respond.io message detail fetch failed:', String(err));
+    return null;
+  }
+}
+
 async function extractMediaPayload(body) {
   const messageObj = body?.message?.message || {};
   const type = body?.message?.type || messageObj?.type || null;
   if (!type || type === 'text') return null;
 
-  const url = messageObj?.url || messageObj?.link || null;
-  const caption = (messageObj?.caption || '').trim() || null;
-  const mimeType = messageObj?.mimeType || messageObj?.mimetype || null;
+  let url = messageObj?.url || messageObj?.link || messageObj?.attachment?.url || null;
+  let caption = (messageObj?.caption || messageObj?.attachment?.description || '').trim() || null;
+  let mimeType = messageObj?.mimeType || messageObj?.mimetype || messageObj?.attachment?.mime || messageObj?.attachment?.mimeType || null;
+
+  if (!url) {
+    const detail = await fetchRespondIoMessageDetail(body);
+    const dmsg = detail?.message || {};
+    const datt = dmsg?.attachment || {};
+    url = dmsg?.url || dmsg?.link || datt?.url || url;
+    caption = caption || (datt?.description || null);
+    mimeType = mimeType || datt?.mime || datt?.mimeType || null;
+  }
 
   const media = { type, url, caption, mimeType, inlineDataUrl: null };
   if (!url) return media;
