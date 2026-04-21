@@ -20,6 +20,7 @@ const FINAL_TEXT_POLL_INTERVAL_MS = Number(process.env.RESPOND_IO_FINAL_TEXT_POL
 const CONTEXT_MESSAGES = Number(process.env.RESPOND_IO_CONTEXT_MESSAGES || 60);
 const CONTEXT_MAX_CHARS = Number(process.env.RESPOND_IO_CONTEXT_MAX_CHARS || 8000);
 const PROXY_VERSION = process.env.PROXY_VERSION || '2026-04-21-mcp-attachment-guard';
+const MCP_WAKE_INSTRUCTION = `[MCP MANDATORY ON EVERY WAKE]\nBefore drafting any customer reply, you MUST read the live thread via MCP for this contact (list_messages; and if latest inbound includes attachment or missing text, call get_message for message detail).\nUse that MCP thread state as the source of truth for continuity, dedupe, and intent routing.\nIf MCP read fails, do not send intro/menu; send one brief fallback asking for patience while we verify context.`;
 
 // Controlled MCP rollout flags (Phase 0/1 scaffolding)
 const RESPONDIO_MCP_MODE = String(process.env.RESPONDIO_MCP_MODE || 'off').toLowerCase(); // off|shadow|canary|primary
@@ -506,7 +507,7 @@ export default async function handler(req, res) {
     const mediaBlock = mediaPayload
       ? `\n\n[respond.io media]\n- type: ${mediaPayload.type || 'unknown'}\n- mime: ${mediaPayload.mimeType || 'unknown'}\n- resolved_via: ${mediaPayload.resolvedVia || 'unknown'}\n- caption: ${mediaPayload.caption || '(none)'}\n- url: ${mediaPayload.url || '(missing)'}`
       : '';
-    const enrichedMessage = `${transformed.message}${contextBlock}${mediaBlock}`;
+    const enrichedMessage = `${MCP_WAKE_INSTRUCTION}\n\n${transformed.message}${contextBlock}${mediaBlock}`;
 
     messageCache.set(dedupeKey, Date.now());
 
