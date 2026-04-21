@@ -19,6 +19,7 @@ const FINAL_TEXT_POLL_MS = Number(process.env.RESPOND_IO_FINAL_TEXT_POLL_MS || 1
 const FINAL_TEXT_POLL_INTERVAL_MS = Number(process.env.RESPOND_IO_FINAL_TEXT_POLL_INTERVAL_MS || 1500);
 const CONTEXT_MESSAGES = Number(process.env.RESPOND_IO_CONTEXT_MESSAGES || 60);
 const CONTEXT_MAX_CHARS = Number(process.env.RESPOND_IO_CONTEXT_MAX_CHARS || 8000);
+const PROXY_VERSION = process.env.PROXY_VERSION || '2026-04-21-mcp-attachment-guard';
 
 // Controlled MCP rollout flags (Phase 0/1 scaffolding)
 const RESPONDIO_MCP_MODE = String(process.env.RESPONDIO_MCP_MODE || 'off').toLowerCase(); // off|shadow|canary|primary
@@ -403,8 +404,8 @@ function buildMessage(body) {
 async function fetchRespondIoMessageDetail(body) {
   try {
     if (!RESPOND_IO_TOKEN) return null;
-    const contactId = body?.contact?.id;
-    const messageId = body?.message?.id;
+    const contactId = body?.contact?.id || body?.message?.contactId || body?.contactId;
+    const messageId = body?.message?.id || body?.message?.messageId;
     if (!contactId || !messageId) return null;
 
     const url = `${RESPOND_IO_API_BASE}/contact/id:${encodeURIComponent(String(contactId))}/message/id:${encodeURIComponent(String(messageId))}`;
@@ -430,6 +431,7 @@ async function extractMediaPayload(body) {
   let url = messageObj?.url || messageObj?.link || messageObj?.attachment?.url || null;
   let caption = (messageObj?.caption || messageObj?.attachment?.description || '').trim() || null;
   let mimeType = messageObj?.mimeType || messageObj?.mimetype || messageObj?.attachment?.mime || messageObj?.attachment?.mimeType || null;
+  let resolvedVia = url ? 'webhook' : 'unresolved';
 
   if (!url) {
     const detail = await fetchRespondIoMessageDetail(body);
@@ -438,9 +440,10 @@ async function extractMediaPayload(body) {
     url = dmsg?.url || dmsg?.link || datt?.url || url;
     caption = caption || (datt?.description || null);
     mimeType = mimeType || datt?.mime || datt?.mimeType || null;
+    if (url) resolvedVia = 'detail_fetch';
   }
 
-  const media = { type, url, caption, mimeType, inlineDataUrl: null };
+  const media = { type, url, caption, mimeType, inlineDataUrl: null, resolvedVia };
   if (!url) return media;
 
   try {
@@ -498,9 +501,12 @@ export default async function handler(req, res) {
     const contextBlock = recentContext?.contextText
       ? `\n\n[respond.io recent thread context]\n${recentContext.contextText}`
       : '';
-    const enrichedMessage = `${transformed.message}${contextBlock}`;
 
     const mediaPayload = await extractMediaPayload(req.body);
+    const mediaBlock = mediaPayload
+      ? `\n\n[respond.io media]\n- type: ${mediaPayload.type || 'unknown'}\n- mime: ${mediaPayload.mimeType || 'unknown'}\n- resolved_via: ${mediaPayload.resolvedVia || 'unknown'}\n- caption: ${mediaPayload.caption || '(none)'}\n- url: ${mediaPayload.url || '(missing)'}`
+      : '';
+    const enrichedMessage = `${transformed.message}${contextBlock}${mediaBlock}`;
 
     messageCache.set(dedupeKey, Date.now());
 
@@ -514,9 +520,12 @@ export default async function handler(req, res) {
     };
 
     console.log('respond.io rollout meta', {
+      proxyVersion: PROXY_VERSION,
       messageId,
       sessionKey: transformed.sessionKey,
-      rollout: transformed.rollout || null
+      rollout: transformed.rollout || null,
+      mediaResolvedVia: mediaPayload?.resolvedVia || null,
+      mediaUrlPresent: Boolean(mediaPayload?.url)
     });
 
     const requestStartMs = Date.now();
