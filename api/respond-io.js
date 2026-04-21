@@ -161,8 +161,34 @@ async function sendRespondIoText(identifier, text) {
   return { ok: resp.ok, status: resp.status, body };
 }
 
+function sanitizeOutboundText(text) {
+  let t = stripReplyTags(String(text || '')).trim();
+  if (!t) return '';
+
+  // Hard-block non-canonical commercial listing links.
+  if (/https?:\/\/dulos\.io\/eventos\b/i.test(t)) {
+    return '¡Claro! ¿Me compartes el nombre exacto del evento y te paso el link directo de compra?';
+  }
+
+  // Hard-block incorrect default redemption guidance at box office.
+  if (/\b(canje|redenci[oó]n)\b[\s\S]{0,40}\btaquilla\b/i.test(t) || /\btaquilla\b[\s\S]{0,40}\b(canje|redenci[oó]n)\b/i.test(t)) {
+    t = t.replace(/[^\n]*\btaquilla\b[^\n]*\n?/gi, '').trim();
+    if (!t) {
+      t = 'Para ingresar, usa el link/QR de tu orden de boletos. Si no lo encuentras, compárteme tu correo de compra y te ayudo a recuperarlo.';
+    }
+  }
+
+  // Remove unrequested optional-offer tails.
+  t = t
+    .replace(/\n?\s*si quieres[,\s].*$/i, '')
+    .replace(/\n?\s*if you want[,\s].*$/i, '')
+    .trim();
+
+  return t;
+}
+
 function computeOutboundKey(identifier, text) {
-  const normalized = stripReplyTags(String(text || ''))
+  const normalized = sanitizeOutboundText(text)
     .toLowerCase()
     .replace(/\s+/g, ' ')
     .trim();
@@ -171,14 +197,17 @@ function computeOutboundKey(identifier, text) {
 }
 
 async function sendRespondIoTextDedup(identifier, text) {
-  const key = computeOutboundKey(identifier, text);
+  const safeText = sanitizeOutboundText(text);
+  if (!safeText) return { ok: true, skipped: true, reason: 'empty_after_sanitize' };
+
+  const key = computeOutboundKey(identifier, safeText);
   const now = Date.now();
   const prev = outboundCache.get(key);
   if (prev && now - prev < OUTBOUND_DEDUPE_WINDOW_MS) {
     return { ok: true, skipped: true, reason: 'duplicate_outbound_suppressed' };
   }
 
-  const result = await sendRespondIoText(identifier, text);
+  const result = await sendRespondIoText(identifier, safeText);
   if (result.ok) outboundCache.set(key, now);
   return result;
 }
